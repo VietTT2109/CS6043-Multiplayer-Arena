@@ -1,0 +1,16 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Python virtual environments
+.venv/
+venv/
+
+# Experiment output
+*.csv
+*.png
+
+# Editor and OS files
+.vscode/
+.DS_Store
+Thumbs.db
