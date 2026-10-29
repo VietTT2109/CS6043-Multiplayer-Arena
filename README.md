@@ -1,15 +1,58 @@
-# CS6043 Multiplayer Arena — experimental starter
+# CS6043 Multiplayer Coin Rush — playable prototype
 
-Python 3 with standard library only. In three terminals run:
+This update adds a shared collectible coin and server-owned scores to the existing TCP/UDP arena. It preserves 30 Hz movement, CSV event logging, and the optional movement relay delay / UDP application-message loss. No new Python dependencies are required for the game (Tkinter is bundled in most Windows Python installs).
 
-```powershell
-python server.py --protocol tcp --delay-ms 100
-python client.py --protocol tcp --update-hz 10 --log-file player1_tcp.csv
-python client.py --protocol tcp --update-hz 10 --log-file player2_tcp.csv
-```
+## Replace only two files
+Copy `server.py` and `client.py` into your **existing** project folder. Keep `analyze_logs.py` and your CSV files. The CSV schema for movement send/receive events is unchanged.
 
-Stop all three processes to change protocol, then repeat with `udp` replacing `tcp` and distinct log names. To simulate relayed UDP application-message loss, run `python server.py --protocol udp --delay-ms 100 --loss-pct 30`.
+## Local test (three terminals)
 
-`--update-hz` controls the target rate of movement updates, from >0 to 30/s. Actual rate may be lower because the GUI updates approximately every 33 ms. `--log-file` writes a separate CSV for each client; always use different paths for the two players and each run. Close windows normally to finish writing files.
+Terminal 1:
 
-CSV fields include send/receive event, protocol, player IDs, sequence numbers, timestamps, sent timestamp, update age in milliseconds, coordinates, payload byte count, and observed sequence gaps. Age is one-way **update age**, not RTT, and works most meaningfully with synchronized clocks (same computer is fine). Sequence gaps are not exact network packet loss; missing last updates are not counted, and out-of-order updates may be discarded. Server delay is application-level relay delay; UDP loss is application-message drop, NOT TCP network packet loss. Future experiments should use network-level emulation for TCP loss and congestion.
+    python server.py --protocol tcp --delay-ms 100
+
+Terminal 2:
+
+    python client.py --protocol tcp --update-hz 30 --log-file p1_coin_tcp.csv
+
+Terminal 3:
+
+    python client.py --protocol tcp --update-hz 30 --log-file p2_coin_tcp.csv
+
+Try moving onto the yellow coin. The scoreboard should increment and the coin should respawn at a new location for both clients.
+
+For UDP, stop everything and run `--protocol udp` everywhere. Example server:
+
+    python server.py --protocol udp --delay-ms 100 --loss-pct 10
+
+## Playing from different computers on a LAN
+
+On the server PC:
+
+    ipconfig
+    python server.py --protocol tcp
+
+Note the server PC's LAN IPv4 address, e.g. `192.168.1.50` (example only). On another Windows PC connected to the same reachable private LAN:
+
+    python client.py --protocol tcp --host 192.168.1.50
+
+Allow inbound TCP port 5000 on the server's *private* network firewall when necessary. For UDP use `--protocol udp` on both ends and allow UDP port 5000. University/guest Wi-Fi can isolate devices. Avoid exposing port 5000 to the public internet: this is a development server without authentication or abuse protections.
+
+## What is authoritative, and what is not?
+
+- **Server-owned**: coin spawn, collision against reported position, scores, and scoreboard broadcasts.
+- **Client-owned for now**: movement and position updates. A malicious client could falsify position. The next stage is server-authoritative input simulation, movement validation, and better reconnection handling.
+- **Transport experiments**: the `--delay-ms` and `--loss-pct` options affect relayed movement updates. Coin/score events are sent separately; UDP score snapshots are repeated periodically and should not be interpreted as reliable UDP acknowledgements.
+- **Multi-hop**: playing from two devices does not by itself guarantee a routed multi-hop network. We will add controlled routing/emulation for those experiments later.
+
+## Files
+
+- `server.py`: shared world and TCP/UDP movement relay.
+- `client.py`: Tkinter arena, coin UI, scoreboard, CSV movement logging.
+- `analyze_logs.py`: prior CSV latency analysis (unchanged).
+
+Commit after testing:
+
+    git add server.py client.py README.md
+    git commit -m "Add multiplayer coin collection and server scoreboard"
+    git push

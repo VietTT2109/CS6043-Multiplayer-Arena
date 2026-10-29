@@ -31,6 +31,10 @@ class Arena:
         self.sent_count = 0
         self.recv_count = 0
         self.missing_updates = 0
+        self.coin = None
+        self.scores = {}
+        self.world_version = -1
+        self.last_join = time.monotonic()
         self.log_handle = None
         self.log_writer = None
         if log_file:
@@ -143,6 +147,15 @@ class Arena:
             if msg.get('type') == 'welcome':
                 self.player_id = msg['id']
                 self.status = f'Player {self.player_id} connected via {self.protocol.upper()}'
+            elif msg.get('type') == 'world':
+                version = msg.get('version', -1)
+                if isinstance(version, int) and version >= self.world_version:
+                    coin = msg.get('coin')
+                    scores = msg.get('scores')
+                    if isinstance(coin, list) and len(coin) == 2 and isinstance(scores, dict):
+                        self.coin = coin
+                        self.scores = scores
+                        self.world_version = version
             elif msg.get('type') == 'move':
                 pid = msg.get('id')
                 if pid == self.player_id or not isinstance(pid, int):
@@ -174,6 +187,9 @@ class Arena:
         now = time.monotonic()
         dt = min(now - self.last_frame, 0.1)
         self.last_frame = now
+        if self.running and self.protocol == 'udp' and self.player_id is None and now - self.last_join > 1:
+            self.send({'type': 'join'})
+            self.last_join = now
         if self.running and self.player_id is not None:
             dx = int('d' in self.keys or 'right' in self.keys) - int('a' in self.keys or 'left' in self.keys)
             dy = int('s' in self.keys or 'down' in self.keys) - int('w' in self.keys or 'up' in self.keys)
@@ -205,9 +221,16 @@ class Arena:
             self.canvas.create_line(x, 0, x, HEIGHT, fill='#26394d')
         for y in range(0, HEIGHT, 50):
             self.canvas.create_line(0, y, WIDTH, y, fill='#26394d')
+        if self.coin is not None:
+            cx, cy = self.coin
+            self.canvas.create_oval(cx-11, cy-11, cx+11, cy+11, fill='#f3d34a', outline='#fff3aa', width=2)
+            self.canvas.create_text(cx, cy-20, text='COIN', fill='#fff3aa', font=('Arial', 10, 'bold'))
         self.dot(self.x, self.y, '#44adff', f'You (P{self.player_id or "?"})')
         for pid, (x, y, _) in self.other.items():
             self.dot(x, y, '#ffbd57', f'Player {pid}')
+        score_line = '   '.join(f'P{pid}: {score}' for pid, score in sorted(self.scores.items(), key=lambda item: int(item[0])))
+        self.canvas.create_text(WIDTH // 2, 18, text='COIN RUSH   |   ' + (score_line or 'Waiting for players'),
+                                fill='white', font=('Arial', 14, 'bold'))
         age = list(self.age_samples)
         avg = statistics.mean(age) if age else 0
         p95 = sorted(age)[int(0.95 * (len(age) - 1))] if age else 0
