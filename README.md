@@ -1,58 +1,43 @@
-# CS6043 Multiplayer Coin Rush — playable prototype
+# CS6043 Coin Rush (Server-authoritative movement)
 
-This update adds a shared collectible coin and server-owned scores to the existing TCP/UDP arena. It preserves 30 Hz movement, CSV event logging, and the optional movement relay delay / UDP application-message loss. No new Python dependencies are required for the game (Tkinter is bundled in most Windows Python installs).
+## Local TCP
 
-## Replace only two files
-Copy `server.py` and `client.py` into your **existing** project folder. Keep `analyze_logs.py` and your CSV files. The CSV schema for movement send/receive events is unchanged.
+Terminal 1: `python server.py --protocol tcp --host 127.0.0.1 --delay-ms 100`
 
-## Local test (three terminals)
+Terminal 2: `python client.py --protocol tcp --update-hz 30 --log-file p1_authoritative_tcp.csv`
 
-Terminal 1:
+Terminal 3: `python client.py --protocol tcp --update-hz 30 --log-file p2_authoritative_tcp.csv`
 
-    python server.py --protocol tcp --delay-ms 100
+## Local UDP
 
-Terminal 2:
+Terminal 1: `python server.py --protocol udp --host 127.0.0.1 --delay-ms 100 --loss-pct 0`
 
-    python client.py --protocol tcp --update-hz 30 --log-file p1_coin_tcp.csv
+Terminal 2: `python client.py --protocol udp --update-hz 30 --log-file p1_authoritative_udp.csv`
 
-Terminal 3:
+Terminal 3: `python client.py --protocol udp --update-hz 30 --log-file p2_authoritative_udp.csv`
 
-    python client.py --protocol tcp --update-hz 30 --log-file p2_coin_tcp.csv
+## Two computers
 
-Try moving onto the yellow coin. The scoreboard should increment and the coin should respawn at a new location for both clients.
+On the server computer: `python server.py --protocol udp --host 0.0.0.0 --delay-ms 100 --loss-pct 0`
 
-For UDP, stop everything and run `--protocol udp` everywhere. Example server:
+On remote computer: `python client.py --protocol udp --host YOUR_SERVER_LAN_IPV4 --update-hz 30`
 
-    python server.py --protocol udp --delay-ms 100 --loss-pct 10
+Restrict firewall permissions to trusted private networks. For TCP, change both protocol flags.
 
-## Playing from different computers on a LAN
+## How the new protocol works
 
-On the server PC:
+- Each client sends `{"type":"input","seq":N,"dx":-1|0|1,"dy":-1|0|1,"sent_at":...}`.
+- The server validates sequence order and bounds motion using elapsed server time.
+- The server broadcasts authoritative `move` messages to *all* players, including the sender (for position reconciliation).
+- Coin collection and scores are determined only by the server.
+- The client predicts its own movement locally and replays pending inputs after receiving a server position.
+- `--delay-ms` delays outgoing authoritative movement; `--loss-pct` discards some UDP application messages (not actual network packets). Coin/score updates are not impaired by this setting.
+- CSV `send` rows now represent input messages; `receive` rows represent authoritative movement updates from other players. Their sizes may differ from older versions. `update_age_ms` is based on the originator timestamp and assumes synchronized system clocks on different computers.
 
-    ipconfig
-    python server.py --protocol tcp
+## Tests
 
-Note the server PC's LAN IPv4 address, e.g. `192.168.1.50` (example only). On another Windows PC connected to the same reachable private LAN:
+Try TCP/UDP at 0 and 100 ms delay. Test that both players see each other, coins are collected once, scores agree, and local motion is responsive. Under 30% UDP simulated loss expect stale/choppy remote positions and potentially more visible prediction corrections. Make new CSV filenames to preserve earlier baseline results.
 
-    python client.py --protocol tcp --host 192.168.1.50
+Run `python -m py_compile server.py client.py` to check syntax. The included `test_network.py` is an optional smoke test for machines allowing local sockets.
 
-Allow inbound TCP port 5000 on the server's *private* network firewall when necessary. For UDP use `--protocol udp` on both ends and allow UDP port 5000. University/guest Wi-Fi can isolate devices. Avoid exposing port 5000 to the public internet: this is a development server without authentication or abuse protections.
-
-## What is authoritative, and what is not?
-
-- **Server-owned**: coin spawn, collision against reported position, scores, and scoreboard broadcasts.
-- **Client-owned for now**: movement and position updates. A malicious client could falsify position. The next stage is server-authoritative input simulation, movement validation, and better reconnection handling.
-- **Transport experiments**: the `--delay-ms` and `--loss-pct` options affect relayed movement updates. Coin/score events are sent separately; UDP score snapshots are repeated periodically and should not be interpreted as reliable UDP acknowledgements.
-- **Multi-hop**: playing from two devices does not by itself guarantee a routed multi-hop network. We will add controlled routing/emulation for those experiments later.
-
-## Files
-
-- `server.py`: shared world and TCP/UDP movement relay.
-- `client.py`: Tkinter arena, coin UI, scoreboard, CSV movement logging.
-- `analyze_logs.py`: prior CSV latency analysis (unchanged).
-
-Commit after testing:
-
-    git add server.py client.py README.md
-    git commit -m "Add multiplayer coin collection and server scoreboard"
-    git push
+**Limitations:** This is an incremental client-prediction implementation, not lag compensation or interpolation. Prediction uses elapsed client time; server uses elapsed server time, so corrections may occasionally be noticeable. Server state is not persisted. Server-authoritative speed is bounded but does not yet handle obstacles, anti-cheat identities, or internet security. Multi-hop is a separate later network experiment.
