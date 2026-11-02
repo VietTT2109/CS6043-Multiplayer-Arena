@@ -1,4 +1,4 @@
-"""Coin Rush: server-authoritative TCP/UDP movement, coin scoring, optional relay impairment.
+"""Coin Rush: server-authoritative TCP/UDP movement, timed rounds, optional relay impairment.
 
 Movement updates are direction inputs; the server computes and validates positions.
 --loss-pct drops outgoing UDP application updates, NOT IP packets.
@@ -26,7 +26,14 @@ def valid_input(m):
 
 
 class Game:
-    def __init__(self):
+    def __init__(self, round_seconds=60, intermission_seconds=8, min_players=2):
+        self.round_seconds = round_seconds
+        self.intermission_seconds = intermission_seconds
+        self.min_players = min_players
+        self.phase = 'waiting'
+        self.deadline = None
+        self.winners = []
+        self.round_number = 0
         self.lock = threading.RLock()
         self.positions = {}    # id: [x,y]
         self.last_input = {}   # id: monotonic time of last accepted input
@@ -46,6 +53,7 @@ class Game:
             self.seqs[pid] = -1
             self.scores[pid] = 0
             self.version += 1
+            self.advance()
             return self.world()
 
     def leave(self, pid):
@@ -53,13 +61,44 @@ class Game:
             for d in (self.positions, self.last_input, self.seqs, self.scores):
                 d.pop(pid, None)
             self.version += 1
+            self.advance()
             return self.world()
+
+    def advance(self):
+        """Update round transitions using monotonic server time (lock required)."""
+        with self.lock:
+            now = time.monotonic()
+            count = len(self.scores)
+            if count < self.min_players:
+                if self.phase != 'waiting':
+                    self.phase, self.deadline, self.winners = 'waiting', None, []
+                    self.version += 1
+                return
+            if self.phase == 'waiting' or (self.phase == 'finished' and now >= self.deadline):
+                self.phase = 'playing'
+                self.deadline = now + self.round_seconds
+                self.round_number += 1
+                self.winners = []
+                self.coin = self.new_coin()
+                for pid in self.scores:
+                    self.scores[pid] = 0
+                self.version += 1
+            elif self.phase == 'playing' and now >= self.deadline:
+                self.phase = 'finished'
+                best = max(self.scores.values(), default=0)
+                self.winners = sorted(pid for pid, score in self.scores.items() if score == best)
+                self.deadline = now + self.intermission_seconds
+                self.version += 1
 
     def world(self):
         with self.lock:
             return {'type': 'world', 'coin': self.coin[:],
                     'scores': {str(k): v for k, v in self.scores.items()},
-                    'version': self.version}
+                    'version': self.version,
+                    'phase': self.phase,
+                    'remaining': max(0, self.deadline - time.monotonic()) if self.deadline else 0,
+                    'winners': self.winners[:], 'round': self.round_number,
+                    'player_count': len(self.scores), 'min_players': self.min_players}
 
     def input(self, pid, msg):
         """Returns (authoritative movement update, world changed), or (None, False)."""
@@ -80,7 +119,7 @@ class Game:
             y = min(HEIGHT - 15, max(15, y + SPEED * dy / norm * dt))
             self.positions[pid] = [x, y]
             coin_changed = False
-            if (x-self.coin[0])**2 + (y-self.coin[1])**2 <= (PLAYER_R+COIN_R)**2:
+            if self.phase == 'playing' and (x-self.coin[0])**2 + (y-self.coin[1])**2 <= (PLAYER_R+COIN_R)**2:
                 self.scores[pid] += 1
                 old = self.coin
                 for _ in range(30):
@@ -127,8 +166,8 @@ class DelayedRelay:
                 pass
 
 
-def serve_tcp(host, port, relay):
-    game = Game()
+def serve_tcp(host, port, relay, round_seconds, intermission_seconds, min_players):
+    game = Game(round_seconds, intermission_seconds, min_players)
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind((host, port))
@@ -154,6 +193,14 @@ def serve_tcp(host, port, relay):
                 send(c, world)
             except OSError:
                 pass
+
+    def heartbeat():
+        while True:
+            time.sleep(0.25)
+            game.advance()
+            broadcast_world()
+
+    threading.Thread(target=heartbeat, daemon=True).start()
 
     def handle(conn, pid):
         try:
@@ -194,8 +241,8 @@ def serve_tcp(host, port, relay):
         threading.Thread(target=handle, args=(conn, pid), daemon=True).start()
 
 
-def serve_udp(host, port, relay):
-    game = Game()
+def serve_udp(host, port, relay, round_seconds, intermission_seconds, min_players):
+    game = Game(round_seconds, intermission_seconds, min_players)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((host, port))
     clients = {}  # address -> [id, last_seen]
@@ -226,6 +273,7 @@ def serve_udp(host, port, relay):
                     clients.pop(addr, None)
             for _, pid in expired:
                 game.leave(pid)
+            game.advance()
             broadcast_world()
 
     threading.Thread(target=heartbeat, daemon=True).start()
@@ -255,6 +303,13 @@ def serve_udp(host, port, relay):
             broadcast_world()
             continue
         pid = entry[0]
+        if msg.get('type') == 'leave':
+            with clients_lock:
+                clients.pop(addr, None)
+            game.leave(pid)
+            broadcast_world()
+            print(f'Player {pid} left', flush=True)
+            continue
         if msg.get('type') == 'join':
             send(addr, {'type': 'welcome', 'id': pid, 'x': WIDTH/2, 'y': HEIGHT/2})
             broadcast_world()
@@ -276,10 +331,16 @@ if __name__ == '__main__':
     ap.add_argument('--port', type=int, default=5000)
     ap.add_argument('--delay-ms', type=float, default=0)
     ap.add_argument('--loss-pct', type=float, default=0)
+    ap.add_argument('--round-seconds', type=float, default=60)
+    ap.add_argument('--intermission-seconds', type=float, default=8)
+    ap.add_argument('--min-players', type=int, default=2)
     args = ap.parse_args()
     if args.delay_ms < 0 or not 0 <= args.loss_pct <= 100:
         ap.error('delay-ms must be >= 0 and loss-pct between 0 and 100')
     if args.protocol == 'tcp' and args.loss_pct:
         ap.error('loss-pct applies only to UDP application movement updates')
+    if args.round_seconds <= 0 or args.intermission_seconds <= 0 or not 1 <= args.min_players <= 20:
+        ap.error('round/intermission seconds must be positive; min-players must be 1-20')
     relay = DelayedRelay(args.delay_ms, args.loss_pct)
-    (serve_tcp if args.protocol == 'tcp' else serve_udp)(args.host, args.port, relay)
+    (serve_tcp if args.protocol == 'tcp' else serve_udp)(
+        args.host, args.port, relay, args.round_seconds, args.intermission_seconds, args.min_players)

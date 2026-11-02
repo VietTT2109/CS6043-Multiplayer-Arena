@@ -1,5 +1,4 @@
-"""
-Coin Rush Tkinter client: locally predicted, server-authoritative multiplayer.
+"""Coin Rush Tkinter client: locally predicted, server-authoritative multiplayer.
 """
 import argparse
 import csv
@@ -46,6 +45,13 @@ class Arena:
         self.coin = None
         self.scores = {}
         self.world_version = -1
+        self.phase = 'waiting'
+        self.remaining = 0.0
+        self.world_received_at = time.monotonic()
+        self.winners = []
+        self.round_number = 0
+        self.player_count = 0
+        self.min_players = 2
         self.running = True
         self.status = 'Connecting...'
         self.last_join = time.monotonic()
@@ -159,6 +165,13 @@ class Arena:
                     self.world_version = msg['version']
                     self.coin = msg.get('coin')
                     self.scores = msg.get('scores', {})
+                    self.phase = msg.get('phase', 'waiting')
+                    self.remaining = max(0.0, float(msg.get('remaining', 0)))
+                    self.world_received_at = time.monotonic()
+                    self.winners = msg.get('winners', [])
+                    self.round_number = msg.get('round', 0)
+                    self.player_count = msg.get('player_count', len(self.scores))
+                    self.min_players = msg.get('min_players', 2)
                     self.other = {p: v for p, v in self.other.items() if str(p) in self.scores}
             elif kind == 'move':
                 pid, seq = msg.get('id'), msg.get('seq')
@@ -242,6 +255,16 @@ class Arena:
             self.dot(x, y, '#ffbd57', f'Player {pid}')
         scoreboard = '   '.join(f'P{k}: {v}' for k, v in sorted(self.scores.items(), key=lambda item: int(item[0])))
         self.canvas.create_text(10, 12, anchor='nw', text=f'Scores: {scoreboard}', fill='white', font=('Arial', 13, 'bold'))
+        remaining = max(0, self.remaining - (now - self.world_received_at))
+        if self.phase == 'playing':
+            phase_text = f'Round {self.round_number}: {remaining:.0f}s remaining'
+        elif self.phase == 'finished':
+            winner_names = ', '.join(f'P{pid}' for pid in self.winners)
+            phase_text = f'Round over! Winner: {winner_names or "None"} | Next round in {remaining:.0f}s'
+        else:
+            phase_text = f'Waiting for players ({self.player_count}/{self.min_players})'
+        self.canvas.create_text(WIDTH/2, 22, text=phase_text, fill='#ffdf55',
+                                font=('Arial', 15, 'bold'))
         ages = list(self.age_samples)
         avg = statistics.mean(ages) if ages else 0
         p95 = sorted(ages)[int(.95*(len(ages)-1))] if ages else 0
@@ -255,6 +278,12 @@ class Arena:
 
     def close(self):
         self.running = False
+        if self.protocol == 'udp':
+            # Best effort: UDP leave can be lost; server also expires stale clients.
+            try:
+                self.sock.send(json.dumps({'type': 'leave'}).encode())
+            except OSError:
+                pass
         try:
             self.sock.shutdown(socket.SHUT_RDWR)
         except OSError:

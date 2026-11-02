@@ -1,43 +1,51 @@
-# CS6043 Coin Rush (Server-authoritative movement)
+# CS6043 Coin Rush (Timed Rounds)
 
-## Local TCP
+Replace your current **server.py** and **client.py** together. Keep your earlier logs and `analyze_logs.py` (the included analysis copy is unchanged).
 
-Terminal 1: `python server.py --protocol tcp --host 127.0.0.1 --delay-ms 100`
+## New features
 
-Terminal 2: `python client.py --protocol tcp --update-hz 30 --log-file p1_authoritative_tcp.csv`
+- Waiting lobby until at least `--min-players` are connected (default 2)
+- Timed rounds (default 60 seconds)
+- Winner/tie displayed at the end of the round
+- Automatic new round after an 8-second intermission
+- Game returns to lobby when active player count drops below minimum
+- UDP best-effort leave on window close, plus 15-second timeout for unexpected disconnects
+- TCP disconnect handling retained
+- Existing server-authoritative movement, client-side prediction, coins, and CSV logging retained
 
-Terminal 3: `python client.py --protocol tcp --update-hz 30 --log-file p2_authoritative_tcp.csv`
+## Local testing (3 terminals)
 
-## Local UDP
+TCP:
+```
+python server.py --protocol tcp --round-seconds 20 --intermission-seconds 5
+python client.py --protocol tcp --update-hz 30 --log-file p1_tcp.csv
+python client.py --protocol tcp --update-hz 30 --log-file p2_tcp.csv
+```
 
-Terminal 1: `python server.py --protocol udp --host 127.0.0.1 --delay-ms 100 --loss-pct 0`
+UDP: stop all three processes and replace `tcp` with `udp`. Server example:
+```
+python server.py --protocol udp --round-seconds 20 --intermission-seconds 5 --delay-ms 100 --loss-pct 10
+```
 
-Terminal 2: `python client.py --protocol udp --update-hz 30 --log-file p1_authoritative_udp.csv`
+## LAN play
 
-Terminal 3: `python client.py --protocol udp --update-hz 30 --log-file p2_authoritative_udp.csv`
+Server: `python server.py --protocol udp --host 0.0.0.0`
 
-## Two computers
+Other laptop: `python client.py --protocol udp --host SERVER_LAN_IP`
 
-On the server computer: `python server.py --protocol udp --host 0.0.0.0 --delay-ms 100 --loss-pct 0`
-
-On remote computer: `python client.py --protocol udp --host YOUR_SERVER_LAN_IPV4 --update-hz 30`
-
-Restrict firewall permissions to trusted private networks. For TCP, change both protocol flags.
-
-## How the new protocol works
-
-- Each client sends `{"type":"input","seq":N,"dx":-1|0|1,"dy":-1|0|1,"sent_at":...}`.
-- The server validates sequence order and bounds motion using elapsed server time.
-- The server broadcasts authoritative `move` messages to *all* players, including the sender (for position reconciliation).
-- Coin collection and scores are determined only by the server.
-- The client predicts its own movement locally and replays pending inputs after receiving a server position.
-- `--delay-ms` delays outgoing authoritative movement; `--loss-pct` discards some UDP application messages (not actual network packets). Coin/score updates are not impaired by this setting.
-- CSV `send` rows now represent input messages; `receive` rows represent authoritative movement updates from other players. Their sizes may differ from older versions. `update_age_ms` is based on the originator timestamp and assumes synchronized system clocks on different computers.
+Use a trusted network; allow inbound UDP/TCP port 5000 on the server host as needed.
 
 ## Tests
 
-Try TCP/UDP at 0 and 100 ms delay. Test that both players see each other, coins are collected once, scores agree, and local motion is responsive. Under 30% UDP simulated loss expect stale/choppy remote positions and potentially more visible prediction corrections. Make new CSV filenames to preserve earlier baseline results.
+```
+python -m unittest -v test_rounds.py test_network.py
+```
 
-Run `python -m py_compile server.py client.py` to check syntax. The included `test_network.py` is an optional smoke test for machines allowing local sockets.
+## Caveats
 
-**Limitations:** This is an incremental client-prediction implementation, not lag compensation or interpolation. Prediction uses elapsed client time; server uses elapsed server time, so corrections may occasionally be noticeable. Server state is not persisted. Server-authoritative speed is bounded but does not yet handle obstacles, anti-cheat identities, or internet security. Multi-hop is a separate later network experiment.
+- Disconnects during rounds with fewer than 2 players return to waiting instead of awarding a winner.
+- UDP `leave` is best-effort. If it is lost or the app crashes, stale players are removed after ~15 seconds.
+- TCP reconnect gets a new player ID; there are no persistent accounts.
+- This milestone does not implement a manual ready-up lobby or manual restart. Rematches are automatic.
+- Timers use server monotonic time; client countdown is an approximation refreshed by world updates.
+- `--loss-pct` drops only outgoing UDP movement updates at the application level, not actual IP packets; it is not realistic network congestion.
