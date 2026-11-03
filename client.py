@@ -35,6 +35,9 @@ class Arena:
         self.send_times, self.recv_times = deque(), deque()
         self.age_samples = deque(maxlen=500)
         self.missing_updates = 0
+        self.correction_samples = deque(maxlen=500)
+        self.correction_count = 0
+        self.correction_threshold_px = 1.0
         self.incoming = queue.Queue()
         self.keys = set()
         self.other = {}  # id -> x, y, seq
@@ -63,7 +66,8 @@ class Arena:
             self.log_writer = csv.writer(self.log_handle)
             self.log_writer.writerow(['event', 'protocol', 'player_id', 'peer_id', 'seq',
                                       'timestamp', 'sent_at', 'update_age_ms',
-                                      'x', 'y', 'payload_bytes', 'seq_gap'])
+                                      'x', 'y', 'payload_bytes', 'seq_gap',
+                                      'correction_px', 'corrected'])
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM if protocol == 'tcp' else socket.SOCK_DGRAM)
         self.sock.settimeout(3)
         try:
@@ -104,10 +108,12 @@ class Arena:
         dy = int('s' in self.keys or 'down' in self.keys) - int('w' in self.keys or 'up' in self.keys)
         return dx, dy
 
-    def log(self, event, player, peer, seq, sent_at, age, x, y, nbytes, gap=0):
+    def log(self, event, player, peer, seq, sent_at, age, x, y, nbytes, gap=0,
+            correction_px="", corrected=""):
         if self.log_writer:
             self.log_writer.writerow([event, self.protocol, player, peer, seq,
-                                      time.time(), sent_at, age, x, y, nbytes, gap])
+                                      time.time(), sent_at, age, x, y, nbytes, gap,
+                                      correction_px, corrected])
 
     def send(self, msg):
         try:
@@ -188,6 +194,17 @@ class Arena:
                     px, py = float(x), float(y)
                     for _, dx, dy, dt in self.pending:
                         px, py = move(px, py, dx, dy, dt)
+                    # Correction distance compares the current predicted location
+                    # with the reconciled prediction after replaying unacknowledged inputs.
+                    # This is not the error against the server's location at the same time.
+                    correction_px = math.hypot(px - self.x, py - self.y)
+                    corrected = int(correction_px >= self.correction_threshold_px)
+                    self.correction_samples.append(correction_px)
+                    self.correction_count += corrected
+                    self.log('correction', self.player_id, pid, seq,
+                             msg.get('sent_at'), '', px, py,
+                             len(json.dumps(msg).encode()),
+                             correction_px=round(correction_px, 4), corrected=corrected)
                     self.x, self.y = px, py
                 else:
                     old = self.other.get(pid)
@@ -268,7 +285,9 @@ class Arena:
         ages = list(self.age_samples)
         avg = statistics.mean(ages) if ages else 0
         p95 = sorted(ages)[int(.95*(len(ages)-1))] if ages else 0
+        mean_correction = statistics.mean(self.correction_samples) if self.correction_samples else 0.0
         self.info.config(text=f'{self.status} | Age avg/p95: {avg:.0f}/{p95:.0f} ms | '
+                         f'Correction avg: {mean_correction:.1f}px ({self.correction_count} ≥1px) | '
                          f'Send/recv: {self.recent_rate(self.send_times,now):.1f}/'
                          f'{self.recent_rate(self.recv_times,now):.1f} Hz | Gaps: {self.missing_updates}')
 

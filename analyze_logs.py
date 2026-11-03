@@ -23,6 +23,9 @@ def summarize(path):
     receives = [r for r in rows if r['event'] == 'receive']
     ages = [float(r['update_age_ms']) for r in receives if r.get('update_age_ms')]
     gaps = sum(int(r['seq_gap'] or 0) for r in receives)
+    corrections = [r for r in rows if r['event'] == 'correction']
+    correction_values = [float(r['correction_px']) for r in corrections if r.get('correction_px')]
+    correction_count = sum(int(r.get('corrected') or 0) for r in corrections)
 
     def rate(events):
         if len(events) < 2:
@@ -35,7 +38,10 @@ def summarize(path):
             'send_hz': rate(sends), 'receive_hz': rate(receives),
             'mean_age': statistics.mean(ages) if ages else float('nan'),
             'median_age': statistics.median(ages) if ages else float('nan'),
-            'p95_age': percentile(ages, 95), 'seq_gaps': gaps}
+            'p95_age': percentile(ages, 95), 'seq_gaps': gaps,
+            'mean_correction': statistics.mean(correction_values) if correction_values else float('nan'),
+            'p95_correction': percentile(correction_values, 95),
+            'correction_count': correction_count}
 
 
 def main():
@@ -44,11 +50,12 @@ def main():
     parser.add_argument('--save', default='comparison.png', help='Output graph filename')
     args = parser.parse_args()
     results = [summarize(path) for path in args.files]
-    print(f'{"File":<24} {"Sent":>6} {"Recv":>6} {"Tx Hz":>7} {"Rx Hz":>7} {"Mean ms":>9} {"Med ms":>8} {"P95 ms":>8} {"Gaps":>6}')
+    print(f'{"File":<24} {"Sent":>6} {"Recv":>6} {"Tx Hz":>7} {"Rx Hz":>7} {"Mean ms":>9} {"Med ms":>8} {"P95 ms":>8} {"Gaps":>6} {"Corr avg":>9} {"Corr P95":>9} {"Corrections":>11}')
     for r in results:
         print(f'{r["file"]:<24} {r["sent"]:>6} {r["received"]:>6} {r["send_hz"]:>7.1f} '
               f'{r["receive_hz"]:>7.1f} {r["mean_age"]:>9.1f} {r["median_age"]:>8.1f} '
-              f'{r["p95_age"]:>8.1f} {r["seq_gaps"]:>6}')
+              f'{r["p95_age"]:>8.1f} {r["seq_gaps"]:>6} {r["mean_correction"]:>9.2f} '
+              f'{r["p95_correction"]:>9.2f} {r["correction_count"]:>11}')
     try:
         import matplotlib.pyplot as plt
     except ImportError:

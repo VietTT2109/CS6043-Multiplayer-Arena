@@ -1,51 +1,17 @@
-# CS6043 Coin Rush (Timed Rounds)
+# Phase 8 — Synchronization measurements
 
-Replace your current **server.py** and **client.py** together. Keep your earlier logs and `analyze_logs.py` (the included analysis copy is unchanged).
+New CSV fields: `correction_px` and `corrected`. Each `correction` event is generated when an authoritative acknowledgment is received for the local player. `correction_px` is the distance between the displayed/predicted position immediately before reconciliation and the reconciled predicted position after replaying outstanding inputs. `corrected` is 1 when this adjustment is >=1 pixel. These are *reconciliation adjustment* measurements, not a perfect time-aligned ground-truth position error; receiving an update is not itself evidence of a visible movement jump.
 
-## New features
+Existing `receive` events still log remote movement update age (calculated from sender wall time; requires synchronized clocks across computers) and sequence gaps (not precise physical packet loss).
 
-- Waiting lobby until at least `--min-players` are connected (default 2)
-- Timed rounds (default 60 seconds)
-- Winner/tie displayed at the end of the round
-- Automatic new round after an 8-second intermission
-- Game returns to lobby when active player count drops below minimum
-- UDP best-effort leave on window close, plus 15-second timeout for unexpected disconnects
-- TCP disconnect handling retained
-- Existing server-authoritative movement, client-side prediction, coins, and CSV logging retained
+For a quick two-client run:
 
-## Local testing (3 terminals)
+Terminal 1: `python server.py --protocol tcp --delay-ms 100 --round-seconds 120`
 
-TCP:
-```
-python server.py --protocol tcp --round-seconds 20 --intermission-seconds 5
-python client.py --protocol tcp --update-hz 30 --log-file p1_tcp.csv
-python client.py --protocol tcp --update-hz 30 --log-file p2_tcp.csv
-```
+Terminal 2: `python client.py --protocol tcp --update-hz 30 --log-file p8_tcp_p1.csv`
 
-UDP: stop all three processes and replace `tcp` with `udp`. Server example:
-```
-python server.py --protocol udp --round-seconds 20 --intermission-seconds 5 --delay-ms 100 --loss-pct 10
-```
+Terminal 3: `python client.py --protocol tcp --update-hz 30 --log-file p8_tcp_p2.csv`
 
-## LAN play
+Change all protocols to `udp` for UDP and add `--loss-pct 10` to the server if wanted. Analyze with `python analyze_logs.py p8_tcp_p1.csv p8_tcp_p2.csv` (matplotlib optional for graph).
 
-Server: `python server.py --protocol udp --host 0.0.0.0`
-
-Other laptop: `python client.py --protocol udp --host SERVER_LAN_IP`
-
-Use a trusted network; allow inbound UDP/TCP port 5000 on the server host as needed.
-
-## Tests
-
-```
-python -m unittest -v test_rounds.py test_network.py
-```
-
-## Caveats
-
-- Disconnects during rounds with fewer than 2 players return to waiting instead of awarding a winner.
-- UDP `leave` is best-effort. If it is lost or the app crashes, stale players are removed after ~15 seconds.
-- TCP reconnect gets a new player ID; there are no persistent accounts.
-- This milestone does not implement a manual ready-up lobby or manual restart. Rematches are automatic.
-- Timers use server monotonic time; client countdown is an approximation refreshed by world updates.
-- `--loss-pct` drops only outgoing UDP movement updates at the application level, not actual IP packets; it is not realistic network congestion.
+Keep baseline Phase 7 experiments separate: Phase 8 adds logging and metrics; for meaningful comparison, freeze the version for each testing group.
