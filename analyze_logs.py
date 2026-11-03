@@ -24,6 +24,7 @@ def summarize(path):
     ages = [float(r['update_age_ms']) for r in receives if r.get('update_age_ms')]
     gaps = sum(int(r['seq_gap'] or 0) for r in receives)
     traffic = [r for r in rows if r['event'] == 'traffic_send']
+    reliable_acks = [r for r in rows if r['event'] == 'event_ack']
     corrections = [r for r in rows if r['event'] == 'correction']
     correction_values = [float(r['correction_px']) for r in corrections if r.get('correction_px')]
     correction_count = sum(int(r.get('corrected') or 0) for r in corrections)
@@ -52,7 +53,7 @@ def summarize(path):
     recv_period = elapsed(receives)
 
     return {'file': Path(path).name, 'protocol': rows[0]['protocol'] if rows else '?',
-            'sent': len(sends), 'received': len(receives), 'burst_sent': len(traffic),
+            'sent': len(sends), 'received': len(receives), 'burst_sent': len(traffic), 'reliable_acks': len(reliable_acks),
             'tx_bytes': total_sent, 'rx_bytes': total_recv,
             'tx_Bps': total_sent / send_period if send_period else 0,
             'rx_Bps': total_recv / recv_period if recv_period else 0,
@@ -77,6 +78,9 @@ def main():
               f'{r["receive_hz"]:>7.1f} {r["mean_age"]:>9.1f} {r["median_age"]:>8.1f} '
               f'{r["p95_age"]:>8.1f} {r["seq_gaps"]:>6} {r["mean_correction"]:>9.2f} '
               f'{r["p95_correction"]:>9.2f} {r["correction_count"]:>11}')
+    print('\nUDP reliable-world ACKs by client log:')
+    for r in results:
+        print(f'{r["file"]}: {r["reliable_acks"]} ACK transmissions (includes duplicate acknowledgments)')
     print('\nApplication traffic summary (JSON bytes; TCP includes newline delimiter, not TCP/IP headers):')
     print(f'{"File":<24} {"Burst msgs":>11} {"TX bytes":>10} {"RX bytes":>10} {"TX B/s":>10} {"RX B/s":>10}')
     for r in results:

@@ -1,4 +1,6 @@
 """Coin Rush Tkinter client: locally predicted, server-authoritative multiplayer.
+
+Inputs, never coordinates, are sent to server. Compatible with server.py.
 """
 import argparse
 import csv
@@ -45,6 +47,12 @@ class Arena:
     def __init__(self, root, protocol, host, port, update_hz=30, log_file=None,
                  payload_bytes=0, burst_count=0, burst_interval=1.0):
         self.root, self.protocol = root, protocol
+        self.host, self.port = host, port
+        self.session_token = None
+        self.udp_ready = False
+        self.udp_sock = None
+        self.reliable_seen = set()
+        self.last_hello = 0.0
         self.payload_bytes = payload_bytes
         self.burst_count = burst_count
         self.burst_interval = burst_interval
@@ -92,7 +100,7 @@ class Arena:
                                       'timestamp', 'sent_at', 'update_age_ms',
                                       'x', 'y', 'payload_bytes', 'seq_gap',
                                       'correction_px', 'corrected', 'wire_bytes'])
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM if protocol == 'tcp' else socket.SOCK_DGRAM)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM if protocol in ('tcp', 'hybrid') else socket.SOCK_DGRAM)
         self.sock.settimeout(3)
         try:
             self.sock.connect((host, port))
@@ -101,7 +109,7 @@ class Arena:
             if self.log_handle:
                 self.log_handle.close()
             raise
-        if protocol == 'tcp':
+        if protocol in ('tcp', 'hybrid'):
             self.sock.settimeout(None)
         root.title('CS6043 Coin Rush - ' + protocol.upper())
         root.resizable(False, False)
@@ -144,8 +152,16 @@ class Arena:
             # Padding is only applied to movement inputs and synthetic background traffic.
             sized = msg.get('type') in ('input', 'traffic')
             data = encode_sized(msg, self.payload_bytes if sized else 0)
-            wire = data + (b'\n' if self.protocol == 'tcp' else b'')
-            if self.protocol == 'tcp':
+            if self.protocol == 'hybrid' and sized:
+                if not self.udp_ready or not self.udp_sock:
+                    return
+                msg = dict(msg)
+                msg['token'] = self.session_token
+                data = encode_sized(msg, self.payload_bytes if sized else 0)
+            wire = data + (b'\n' if self.protocol == 'tcp' or (self.protocol == 'hybrid' and not sized) else b'')
+            if self.protocol == 'hybrid' and sized:
+                self.udp_sock.send(data)
+            elif self.protocol in ('tcp', 'hybrid'):
                 self.sock.sendall(wire)
             else:
                 self.sock.send(data)
@@ -174,7 +190,7 @@ class Arena:
 
     def receiver(self):
         try:
-            if self.protocol == 'tcp':
+            if self.protocol in ('tcp', 'hybrid'):
                 for line in self.sock.makefile('r', encoding='utf-8'):
                     if not self.running:
                         break
@@ -195,6 +211,40 @@ class Arena:
             self.running = False
             self.status = 'Server disconnected'
 
+    def hybrid_udp_receiver(self):
+        try:
+            while self.running and self.udp_sock:
+                try:
+                    raw = self.udp_sock.recv(8192)
+                    self.incoming.put((json.loads(raw), len(raw)))
+                except (socket.timeout, ValueError):
+                    continue
+        except OSError:
+            pass
+
+    def udp_hello(self):
+        if self.udp_sock and self.session_token:
+            try:
+                self.udp_sock.send(json.dumps({'type': 'udp_hello',
+                                                'token': self.session_token}).encode())
+                self.last_hello = time.monotonic()
+            except OSError:
+                pass
+
+    def handle_world(self, msg):
+        if type(msg.get('version')) is int and msg['version'] >= self.world_version:
+            self.world_version = msg['version']
+            self.coin = msg.get('coin')
+            self.scores = msg.get('scores', {})
+            self.phase = msg.get('phase', 'waiting')
+            self.remaining = max(0.0, float(msg.get('remaining', 0)))
+            self.world_received_at = time.monotonic()
+            self.winners = msg.get('winners', [])
+            self.round_number = msg.get('round', 0)
+            self.player_count = msg.get('player_count', len(self.scores))
+            self.min_players = msg.get('min_players', 2)
+            self.other = {p: v for p, v in self.other.items() if str(p) in self.scores}
+
     def process_messages(self):
         while True:
             try:
@@ -214,19 +264,27 @@ class Arena:
                 if self.last_own_ack == -1:
                     self.x, self.y = msg.get('x', WIDTH/2), msg.get('y', HEIGHT/2)
                 self.status = f'Player {self.player_id} via {self.protocol.upper()}'
+                if self.protocol == 'hybrid' and self.udp_sock is None:
+                    self.session_token = msg['token']
+                    self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    self.udp_sock.settimeout(.5)
+                    self.udp_sock.connect((self.host, msg['udp_port']))
+                    threading.Thread(target=self.hybrid_udp_receiver, daemon=True).start()
+                    self.udp_hello()
+            elif kind == 'udp_ready' and self.protocol == 'hybrid':
+                self.udp_ready = True
+                self.status = f'Player {self.player_id} via HYBRID (TCP control / UDP movement)'
+            elif kind == 'reliable_world' and self.protocol == 'udp':
+                event_id = msg.get('event_id')
+                if type(event_id) is int:
+                    # ACK every valid event, including duplicates: ACKs can be lost.
+                    self.send({'type': 'event_ack', 'event_id': event_id})
+                    self.log('event_ack', self.player_id, '', event_id, '', '', '', '', 0)
+                    if event_id not in self.reliable_seen:
+                        self.reliable_seen.add(event_id)
+                        self.handle_world(msg.get('world', {}))
             elif kind == 'world':
-                if type(msg.get('version')) is int and msg['version'] >= self.world_version:
-                    self.world_version = msg['version']
-                    self.coin = msg.get('coin')
-                    self.scores = msg.get('scores', {})
-                    self.phase = msg.get('phase', 'waiting')
-                    self.remaining = max(0.0, float(msg.get('remaining', 0)))
-                    self.world_received_at = time.monotonic()
-                    self.winners = msg.get('winners', [])
-                    self.round_number = msg.get('round', 0)
-                    self.player_count = msg.get('player_count', len(self.scores))
-                    self.min_players = msg.get('min_players', 2)
-                    self.other = {p: v for p, v in self.other.items() if str(p) in self.scores}
+                self.handle_world(msg)
             elif kind == 'move':
                 pid, seq = msg.get('id'), msg.get('seq')
                 x, y = msg.get('x'), msg.get('y')
@@ -278,10 +336,13 @@ class Arena:
         now = time.monotonic()
         dt = max(0, min(now - self.last_frame, 0.1))
         self.last_frame = now
+        if self.running and self.protocol == 'hybrid' and self.session_token and not self.udp_ready and now - self.last_hello >= 1:
+            self.udp_hello()
         if self.running and self.player_id is not None:
             dx, dy = self.directions()
-            self.x, self.y = move(self.x, self.y, dx, dy, dt)
-            if now >= self.next_send:
+            if self.protocol != 'hybrid' or self.udp_ready:
+                self.x, self.y = move(self.x, self.y, dx, dy, dt)
+            if now >= self.next_send and (self.protocol != 'hybrid' or self.udp_ready):
                 elapsed = max(0, min(now - self.last_network_step, 0.1))
                 self.last_network_step = now
                 self.seq += 1
@@ -292,7 +353,7 @@ class Arena:
                 self.send({'type': 'input', 'seq': self.seq, 'dx': dx, 'dy': dy,
                            'sent_at': time.time()})
                 self.next_send += (int(max(0, now-self.next_send)/self.send_interval)+1)*self.send_interval
-            if self.burst_count and now >= self.next_burst:
+            if self.burst_count and now >= self.next_burst and (self.protocol != 'hybrid' or self.udp_ready):
                 self.send_burst()
                 self.next_burst += (int(max(0, now-self.next_burst)/self.burst_interval)+1)*self.burst_interval
         elif self.running and self.protocol == 'udp' and now - self.last_join > 1:
@@ -369,6 +430,8 @@ class Arena:
         except OSError:
             pass
         self.sock.close()
+        if self.udp_sock:
+            self.udp_sock.close()
         if self.log_handle:
             self.log_handle.flush()
             self.log_handle.close()
@@ -377,7 +440,7 @@ class Arena:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--protocol', choices=['tcp', 'udp'], required=True)
+    parser.add_argument('--protocol', choices=['tcp', 'udp', 'hybrid'], required=True)
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=5000)
     parser.add_argument('--update-hz', type=float, default=30)
