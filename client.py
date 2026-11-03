@@ -19,6 +19,22 @@ RENDER_MS = 16
 RATE_WINDOW = 5.0
 
 
+def encode_sized(msg, target_bytes):
+    """Make a JSON payload of exactly target_bytes (or natural size if zero)."""
+    raw = json.dumps(msg, separators=(',', ':'), ensure_ascii=True).encode('ascii')
+    if not target_bytes:
+        return raw
+    if len(raw) > target_bytes:
+        raise ValueError(f'Input message ({len(raw)} bytes) exceeds --payload-bytes {target_bytes}')
+    if len(raw) == target_bytes:
+        return raw
+    overhead = len(b',"p":""')
+    if target_bytes - len(raw) < overhead:
+        raise ValueError(f'Cannot pad message from {len(raw)} to {target_bytes} bytes')
+    return raw[:-1] + b',"p":"' + b'x' * (target_bytes - len(raw) - overhead) + b'"}'
+
+
+
 def move(x, y, dx, dy, dt):
     magnitude = max(1.0, math.hypot(dx, dy))
     return (min(WIDTH - 15, max(15, x + SPEED * dx / magnitude * dt)),
@@ -26,8 +42,16 @@ def move(x, y, dx, dy, dt):
 
 
 class Arena:
-    def __init__(self, root, protocol, host, port, update_hz=30, log_file=None):
+    def __init__(self, root, protocol, host, port, update_hz=30, log_file=None,
+                 payload_bytes=0, burst_count=0, burst_interval=1.0):
         self.root, self.protocol = root, protocol
+        self.payload_bytes = payload_bytes
+        self.burst_count = burst_count
+        self.burst_interval = burst_interval
+        self.next_burst = time.monotonic() + burst_interval
+        self.burst_seq = 0
+        self.bytes_sent_window = deque()  # (monotonic time, socket bytes)
+        self.bytes_recv_window = deque()
         self.send_interval = 1.0 / update_hz
         self.next_send = time.monotonic() + self.send_interval
         self.last_frame = time.monotonic()
@@ -67,7 +91,7 @@ class Arena:
             self.log_writer.writerow(['event', 'protocol', 'player_id', 'peer_id', 'seq',
                                       'timestamp', 'sent_at', 'update_age_ms',
                                       'x', 'y', 'payload_bytes', 'seq_gap',
-                                      'correction_px', 'corrected'])
+                                      'correction_px', 'corrected', 'wire_bytes'])
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM if protocol == 'tcp' else socket.SOCK_DGRAM)
         self.sock.settimeout(3)
         try:
@@ -109,26 +133,44 @@ class Arena:
         return dx, dy
 
     def log(self, event, player, peer, seq, sent_at, age, x, y, nbytes, gap=0,
-            correction_px="", corrected=""):
+            correction_px="", corrected="", wire_bytes=""):
         if self.log_writer:
             self.log_writer.writerow([event, self.protocol, player, peer, seq,
                                       time.time(), sent_at, age, x, y, nbytes, gap,
-                                      correction_px, corrected])
+                                      correction_px, corrected, wire_bytes])
 
     def send(self, msg):
         try:
-            data = json.dumps(msg).encode()
+            # Padding is only applied to movement inputs and synthetic background traffic.
+            sized = msg.get('type') in ('input', 'traffic')
+            data = encode_sized(msg, self.payload_bytes if sized else 0)
+            wire = data + (b'\n' if self.protocol == 'tcp' else b'')
             if self.protocol == 'tcp':
-                self.sock.sendall(data + b'\n')
+                self.sock.sendall(wire)
             else:
                 self.sock.send(data)
-            if msg.get('type') == 'input':
-                self.send_times.append(time.monotonic())
-                self.log('send', self.player_id, '', msg['seq'], msg['sent_at'], '',
-                         self.x, self.y, len(data))
-        except OSError:
-            self.status = 'Connection lost'
+            if sized:
+                now = time.monotonic()
+                self.bytes_sent_window.append((now, len(wire)))
+                if msg['type'] == 'input':
+                    self.send_times.append(now)
+                    self.log('send', self.player_id, '', msg['seq'], msg['sent_at'], '',
+                             self.x, self.y, len(data), wire_bytes=len(wire))
+                else:
+                    self.log('traffic_send', self.player_id, '', msg['seq'], '', '',
+                             '', '', len(data), wire_bytes=len(wire))
+        except (OSError, ValueError) as exc:
+            self.status = f'Sending failed: {exc}'
             self.running = False
+
+    def send_burst(self):
+        # These messages add upstream load, but have NO effect on the gameplay state.
+        # The Phase 7 server ignores messages of type traffic.
+        for _ in range(self.burst_count):
+            self.burst_seq += 1
+            self.send({'type': 'traffic', 'seq': self.burst_seq})
+            if not self.running:
+                break
 
     def receiver(self):
         try:
@@ -137,13 +179,14 @@ class Arena:
                     if not self.running:
                         break
                     try:
-                        self.incoming.put(json.loads(line))
+                        self.incoming.put((json.loads(line), len(line.encode('utf-8'))))
                     except ValueError:
                         pass
             else:
                 while self.running:
                     try:
-                        self.incoming.put(json.loads(self.sock.recv(8192)))
+                        raw = self.sock.recv(8192)
+                        self.incoming.put((json.loads(raw), len(raw)))
                     except (socket.timeout, ValueError):
                         continue
         except (OSError, UnicodeError):
@@ -158,6 +201,11 @@ class Arena:
                 msg = self.incoming.get_nowait()
             except queue.Empty:
                 return
+            if isinstance(msg, tuple):
+                msg, received_bytes = msg
+                self.bytes_recv_window.append((time.monotonic(), received_bytes))
+            else:
+                received_bytes = 0
             if not isinstance(msg, dict):
                 continue
             kind = msg.get('type')
@@ -222,7 +270,8 @@ class Arena:
                             self.age_samples.append(age)
                     self.recv_times.append(time.monotonic())
                     self.log('receive', self.player_id, pid, seq, sent_at, age,
-                             x, y, len(json.dumps(msg).encode()), gap)
+                             x, y, len(json.dumps(msg).encode()), gap,
+                             wire_bytes=received_bytes)
 
     def tick(self):
         self.process_messages()
@@ -243,6 +292,9 @@ class Arena:
                 self.send({'type': 'input', 'seq': self.seq, 'dx': dx, 'dy': dy,
                            'sent_at': time.time()})
                 self.next_send += (int(max(0, now-self.next_send)/self.send_interval)+1)*self.send_interval
+            if self.burst_count and now >= self.next_burst:
+                self.send_burst()
+                self.next_burst += (int(max(0, now-self.next_burst)/self.burst_interval)+1)*self.burst_interval
         elif self.running and self.protocol == 'udp' and now - self.last_join > 1:
             self.send({'type': 'join'})  # retry if initial join/welcome lost
             self.last_join = now
@@ -257,6 +309,12 @@ class Arena:
         while times and times[0] < now - RATE_WINDOW:
             times.popleft()
         return len(times) / RATE_WINDOW
+
+    @staticmethod
+    def bytes_per_second(samples, now):
+        while samples and samples[0][0] < now - RATE_WINDOW:
+            samples.popleft()
+        return sum(item[1] for item in samples) / RATE_WINDOW
 
     def draw(self, now):
         self.canvas.delete('all')
@@ -289,7 +347,10 @@ class Arena:
         self.info.config(text=f'{self.status} | Age avg/p95: {avg:.0f}/{p95:.0f} ms | '
                          f'Correction avg: {mean_correction:.1f}px ({self.correction_count} ≥1px) | '
                          f'Send/recv: {self.recent_rate(self.send_times,now):.1f}/'
-                         f'{self.recent_rate(self.recv_times,now):.1f} Hz | Gaps: {self.missing_updates}')
+                         f'{self.recent_rate(self.recv_times,now):.1f} Hz | '
+                         f'Tx/Rx: {self.bytes_per_second(self.bytes_sent_window,now):.0f}/'
+                         f'{self.bytes_per_second(self.bytes_recv_window,now):.0f} B/s | '
+                         f'Gaps: {self.missing_updates}')
 
     def dot(self, x, y, color, name):
         self.canvas.create_oval(x-13, y-13, x+13, y+13, fill=color, outline='white', width=2)
@@ -321,9 +382,20 @@ if __name__ == '__main__':
     parser.add_argument('--port', type=int, default=5000)
     parser.add_argument('--update-hz', type=float, default=30)
     parser.add_argument('--log-file', default=None)
+    parser.add_argument('--payload-bytes', type=int, default=0,
+                        help='Exact JSON size for input and traffic messages; 0=natural size')
+    parser.add_argument('--burst-count', type=int, default=0,
+                        help='Extra upstream traffic messages per burst, not gameplay inputs')
+    parser.add_argument('--burst-interval', type=float, default=1.0,
+                        help='Seconds between synthetic traffic bursts')
     args = parser.parse_args()
     if not 0 < args.update_hz <= 60:
         parser.error('update-hz must be in (0,60]')
+    if args.payload_bytes != 0 and not 128 <= args.payload_bytes <= 1200:
+        parser.error('--payload-bytes must be 0 or between 128 and 1200 (UDP-safe test range)')
+    if not 0 <= args.burst_count <= 100 or args.burst_interval <= 0:
+        parser.error('--burst-count must be 0-100 and --burst-interval must be positive')
     root = tk.Tk()
-    Arena(root, args.protocol, args.host, args.port, args.update_hz, args.log_file)
+    Arena(root, args.protocol, args.host, args.port, args.update_hz, args.log_file,
+          args.payload_bytes, args.burst_count, args.burst_interval)
     root.mainloop()
