@@ -2,8 +2,6 @@
 """
 Run on a Linux VM with Mininet installed:
     sudo -E python3 multihop.py --bw-mbps 1 --delay-ms 20 --loss-pct 0
-
-This emulates Linux network interfaces/queues, not Python application delays.
 """
 import argparse
 
@@ -38,6 +36,31 @@ def configure(net):
     r1.cmd('ip route replace 10.10.3.0/24 via 10.10.12.2')
     r2.cmd('ip route replace 10.10.1.0/24 via 10.10.12.1')
     r2.cmd('ip route replace 10.10.2.0/24 via 10.10.12.1')
+
+
+def build_network(bw_mbps=1.0, delay_ms=20.0, loss_pct=0.0, queue_packets=100):
+    """Construct and start a topology for the experiment runner."""
+    net = Mininet(controller=None, link=TCLink, build=False, autoSetMacs=True)
+    try:
+        c1 = net.addHost('c1')
+        c2 = net.addHost('c2')
+        r1 = net.addHost('r1')
+        r2 = net.addHost('r2')
+        srv = net.addHost('srv')
+        edge = {'bw': 100, 'delay': '1ms'}
+        middle = {'bw': bw_mbps, 'delay': f'{delay_ms}ms',
+                  'loss': loss_pct, 'max_queue_size': queue_packets}
+        net.addLink(c1, r1, intfName1='c1-eth0', intfName2='r1-eth0', **edge)
+        net.addLink(c2, r1, intfName1='c2-eth0', intfName2='r1-eth1', **edge)
+        net.addLink(r1, r2, intfName1='r1-eth2', intfName2='r2-eth0', **middle)
+        net.addLink(r2, srv, intfName1='r2-eth1', intfName2='srv-eth0', **edge)
+        net.build()
+        net.start()
+        configure(net)
+        return net
+    except Exception:
+        net.stop()
+        raise
 
 
 def main():

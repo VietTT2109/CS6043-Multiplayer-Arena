@@ -1,7 +1,4 @@
-"""Coin Rush Tkinter client: locally predicted, server-authoritative multiplayer.
-
-Inputs, never coordinates, are sent to server. Compatible with server.py.
-"""
+"""Coin Rush Tkinter client: locally predicted, server-authoritative multiplayer."""
 import argparse
 import csv
 import json
@@ -45,8 +42,9 @@ def move(x, y, dx, dy, dt):
 
 class Arena:
     def __init__(self, root, protocol, host, port, update_hz=30, log_file=None,
-                 payload_bytes=0, burst_count=0, burst_interval=1.0):
+                 payload_bytes=0, burst_count=0, burst_interval=1.0, window_scale=0.75, duration_seconds=0):
         self.root, self.protocol = root, protocol
+        self.window_scale = window_scale
         self.host, self.port = host, port
         self.session_token = None
         self.udp_ready = False
@@ -113,9 +111,11 @@ class Arena:
             self.sock.settimeout(None)
         root.title('CS6043 Coin Rush - ' + protocol.upper())
         root.resizable(False, False)
-        self.canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg='#142437', highlightthickness=0)
+        self.canvas = tk.Canvas(root, width=round(WIDTH * window_scale), height=round(HEIGHT * window_scale), bg='#142437', highlightthickness=0)
         self.canvas.pack()
-        self.info = tk.Label(root, text='Connecting...', anchor='w')
+        self.info = tk.Label(root, text='Connecting...', anchor='w', justify='left',
+                             wraplength=round(WIDTH * window_scale) - 18,
+                             font=('Arial', 9))
         self.info.pack(fill='x')
         root.bind_all('<KeyPress>', self.key_down)
         root.bind_all('<KeyRelease>', self.key_up)
@@ -128,6 +128,8 @@ class Arena:
         if protocol == 'udp':
             self.send({'type': 'join'})
         self.tick()
+        if duration_seconds > 0:
+            root.after(round(duration_seconds * 1000), self.close)
 
     def key_down(self, event):
         self.keys.add(event.keysym.lower())
@@ -158,7 +160,8 @@ class Arena:
                 msg = dict(msg)
                 msg['token'] = self.session_token
                 data = encode_sized(msg, self.payload_bytes if sized else 0)
-            wire = data + (b'\n' if self.protocol == 'tcp' or (self.protocol == 'hybrid' and not sized) else b'')
+            wire = data + (b'\n' if self.protocol == 'tcp' or
+                           (self.protocol == 'hybrid' and not sized) else b'')
             if self.protocol == 'hybrid' and sized:
                 self.udp_sock.send(data)
             elif self.protocol in ('tcp', 'hybrid'):
@@ -405,6 +408,7 @@ class Arena:
         avg = statistics.mean(ages) if ages else 0
         p95 = sorted(ages)[int(.95*(len(ages)-1))] if ages else 0
         mean_correction = statistics.mean(self.correction_samples) if self.correction_samples else 0.0
+        self.canvas.scale('all', 0, 0, self.window_scale, self.window_scale)
         self.info.config(text=f'{self.status} | Age avg/p95: {avg:.0f}/{p95:.0f} ms | '
                          f'Correction avg: {mean_correction:.1f}px ({self.correction_count} ≥1px) | '
                          f'Send/recv: {self.recent_rate(self.send_times,now):.1f}/'
@@ -445,6 +449,10 @@ if __name__ == '__main__':
     parser.add_argument('--port', type=int, default=5000)
     parser.add_argument('--update-hz', type=float, default=30)
     parser.add_argument('--log-file', default=None)
+    parser.add_argument('--window-scale', type=float, default=0.75,
+                        help='Visual scale; 0.75 = 600x375 display, world stays 800x500')
+    parser.add_argument('--duration-seconds', type=float, default=0,
+                        help='Auto-close after this many seconds; 0 disables')
     parser.add_argument('--payload-bytes', type=int, default=0,
                         help='Exact JSON size for input and traffic messages; 0=natural size')
     parser.add_argument('--burst-count', type=int, default=0,
@@ -458,7 +466,10 @@ if __name__ == '__main__':
         parser.error('--payload-bytes must be 0 or between 128 and 1200 (UDP-safe test range)')
     if not 0 <= args.burst_count <= 100 or args.burst_interval <= 0:
         parser.error('--burst-count must be 0-100 and --burst-interval must be positive')
+    if not 0.4 <= args.window_scale <= 1.5 or args.duration_seconds < 0:
+        parser.error('window-scale must be 0.4-1.5 and duration-seconds must be nonnegative')
     root = tk.Tk()
     Arena(root, args.protocol, args.host, args.port, args.update_hz, args.log_file,
-          args.payload_bytes, args.burst_count, args.burst_interval)
+          args.payload_bytes, args.burst_count, args.burst_interval,
+          args.window_scale, args.duration_seconds)
     root.mainloop()
