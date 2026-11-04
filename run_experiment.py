@@ -37,7 +37,7 @@ def parse_args():
     p.add_argument('--burst-count', type=int, default=0)
     p.add_argument('--window-scale', type=float, default=0.75)
     p.add_argument('--trial', type=int, default=1)
-    p.add_argument('--output-dir', default='results/phase13')
+    p.add_argument('--output-dir', default='results/experiments')
     a = p.parse_args()
     if a.duration < 10 or a.traffic_start < 0 or a.traffic_duration < 0 or a.iperf_kbps < 0:
         p.error('invalid duration or background traffic')

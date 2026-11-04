@@ -10,7 +10,7 @@ from pathlib import Path
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--results', default='results/phase13')
+    ap.add_argument('--results', default='results/experiments')
     args = ap.parse_args()
     root = Path(args.results)
     groups = defaultdict(list)
@@ -35,7 +35,7 @@ def main():
                             mean_age_ms=round(statistics.mean(vals), 3),
                             sd_age_ms=round(statistics.stdev(vals), 3) if len(vals)>1 else 0))
     root.mkdir(parents=True, exist_ok=True)
-    with (root / 'aggregate.csv').open('w', newline='', encoding='utf-8') as fp:
+    with (root / 'experiment_summary.csv').open('w', newline='', encoding='utf-8') as fp:
         writer = csv.DictWriter(fp, fieldnames=list(records[0]))
         writer.writeheader()
         writer.writerows(records)
@@ -52,9 +52,9 @@ def main():
     plt.bar(range(len(records)), [r['mean_age_ms'] for r in records])
     plt.xticks(range(len(labels)), labels)
     plt.ylabel('Mean update age (ms)')
-    plt.title('Phase 13 runs (compare matched network conditions only)')
+    plt.title('Coin Rush: Protocol Comparison')
     plt.tight_layout()
-    plt.savefig(root / 'aggregate.png', dpi=140)
+    plt.savefig(root / 'protocol_comparison.png', dpi=140)
     plt.close()
 
 
