@@ -1,8 +1,4 @@
-"""Coin Rush: server-authoritative TCP/UDP movement, timed rounds, optional relay impairment.
-
-Movement updates are direction inputs; the server computes and validates positions.
---loss-pct drops outgoing UDP application updates, NOT IP packets.
-"""
+"""Coin Rush: server-authoritative TCP/UDP movement, timed rounds, optional relay impairment."""
 import argparse
 import csv
 import secrets
@@ -38,9 +34,9 @@ class Game:
         self.winners = []
         self.round_number = 0
         self.lock = threading.RLock()
-        self.positions = {}    # id: [x,y]
-        self.last_input = {}   # id: monotonic time of last accepted input
-        self.seqs = {}         # id: last accepted sequence number
+        self.positions = {}    
+        self.last_input = {}   
+        self.seqs = {}         
         self.scores = {}
         self.coin = self.new_coin()
         self.version = 0
@@ -68,7 +64,6 @@ class Game:
             return self.world()
 
     def advance(self):
-        """Update round transitions using monotonic server time (lock required)."""
         with self.lock:
             now = time.monotonic()
             count = len(self.scores)
@@ -111,7 +106,6 @@ class Game:
             if pid not in self.positions or msg['seq'] <= self.seqs[pid]:
                 return None, False
             now = time.monotonic()
-            # Server elapsed time bounds travel; forged client timestamps cannot accelerate movement.
             dt = max(0.0, min(now - self.last_input[pid], 0.1))
             self.last_input[pid] = now
             self.seqs[pid] = msg['seq']
@@ -137,12 +131,6 @@ class Game:
 
 
 class DelayedRelay:
-    """Educational application-layer bottleneck for movement relays only.
-
-    All relayed movements share one FIFO rate limiter. Background load consumes
-    *virtual* capacity, not actual network packets. This is not kernel-level
-    congestion, TCP congestion control, or a multi-hop network emulator.
-    """
     def __init__(self, delay_ms, loss_pct, bandwidth_kbps=0, background_kbps=0,
                  queue_kbytes=64, log_file=None):
         self.delay = delay_ms / 1000
@@ -186,8 +174,6 @@ class DelayedRelay:
             if self.bytes_per_second and self.queued_bytes + size > self.queue_limit and udp:
                 self.log('queue_drop', protocol, size)
                 return
-            # A virtual background packet is simply a no-op that occupies
-            # space in the same serialization queue.
             self.count += 1
             start = max(self.next_free, now + self.delay) if self.bytes_per_second else now + self.delay
             finish = start + size / self.bytes_per_second if self.bytes_per_second else start
@@ -199,12 +185,10 @@ class DelayedRelay:
             self.cv.notify()
 
     def background_worker(self):
-        # A packet every 50 ms approximates a steady competing application.
         interval = .05
         while True:
             size = max(1, round(self.background_bytes_per_second * interval))
             with self.cv:
-                # Do not let fake traffic grow forever or starve shutdown.
                 too_full = self.queued_bytes + size > self.queue_limit
             if not too_full:
                 self.submit_background(size)
@@ -248,7 +232,7 @@ class ReliableEvents:
         self.send = send
         self.timeout = timeout
         self.max_retries = max_retries
-        self.pending = {}  # (address, version) -> [message, last_sent, retries, started]
+        self.pending = {}  
         self.lock = threading.RLock()
         self.log_handle = None
         self.writer = None
@@ -271,7 +255,6 @@ class ReliableEvents:
         msg = {'type': 'reliable_world', 'event_id': version, 'world': world}
         with self.lock:
             for peer in peers:
-                # A newer snapshot supersedes older snapshots for this peer.
                 for key in list(self.pending):
                     if key[0] == peer:
                         self.pending.pop(key, None)
@@ -366,7 +349,7 @@ def serve_tcp(host, port, relay, round_seconds, intermission_seconds, min_player
                     if update:
                         with clients_lock:
                             peers = list(clients)
-                        for c in peers:  # INCLUDING originator: authoritative correction / ACK
+                        for c in peers:
                             relay.submit(lambda c=c, update=update: send(c, update), size=len(json.dumps(update).encode()) + 1)
                         if changed:
                             broadcast_world()
@@ -397,11 +380,10 @@ def serve_udp(host, port, relay, round_seconds, intermission_seconds, min_player
     game = Game(round_seconds, intermission_seconds, min_players)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((host, port))
-    clients = {}  # address -> [id, last_seen]
+    clients = {}
     clients_lock = threading.Lock()
     print(f'UDP server on {host}:{port}', flush=True)
     def send_reliable(addr, msg):
-        # Application-level simulation of unreliable critical-event delivery.
         if random.random() * 100 < event_loss_pct:
             return
         send(addr, msg)
@@ -502,9 +484,9 @@ def serve_hybrid(host, port, udp_port, relay, round_seconds, intermission_second
     listener.listen()
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp.bind((host, udp_port))
-    connections = {}  # conn -> (pid, token, send_lock)
-    endpoints = {}   # pid -> UDP addr
-    tokens = {}      # token -> pid
+    connections = {}  
+    endpoints = {}  
+    tokens = {} 
     lock = threading.RLock()
     print(f'HYBRID server: TCP {host}:{port}, UDP {host}:{udp_port}', flush=True)
 
@@ -568,7 +550,6 @@ def serve_hybrid(host, port, udp_port, relay, round_seconds, intermission_second
         try:
             with conn:
                 for line in conn.makefile('r', encoding='utf-8'):
-                    # Control channel currently needs no client-originated commands.
                     try:
                         json.loads(line)
                     except ValueError:

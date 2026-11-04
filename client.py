@@ -19,7 +19,7 @@ RATE_WINDOW = 5.0
 
 
 def encode_sized(msg, target_bytes):
-    """Make a JSON payload of exactly target_bytes (or natural size if zero)."""
+    """Make a JSON payload of exactly target_bytes."""
     raw = json.dumps(msg, separators=(',', ':'), ensure_ascii=True).encode('ascii')
     if not target_bytes:
         return raw
@@ -56,7 +56,7 @@ class Arena:
         self.burst_interval = burst_interval
         self.next_burst = time.monotonic() + burst_interval
         self.burst_seq = 0
-        self.bytes_sent_window = deque()  # (monotonic time, socket bytes)
+        self.bytes_sent_window = deque() 
         self.bytes_recv_window = deque()
         self.send_interval = 1.0 / update_hz
         self.next_send = time.monotonic() + self.send_interval
@@ -70,9 +70,9 @@ class Arena:
         self.correction_threshold_px = 1.0
         self.incoming = queue.Queue()
         self.keys = set()
-        self.other = {}  # id -> x, y, seq
+        self.other = {}
         self.last_own_ack = -1
-        self.pending = deque()  # (seq, dx, dy, client_dt)
+        self.pending = deque()
         self.x, self.y = WIDTH / 2, HEIGHT / 2
         self.seq, self.player_id = 0, None
         self.coin = None
@@ -151,7 +151,6 @@ class Arena:
 
     def send(self, msg):
         try:
-            # Padding is only applied to movement inputs and synthetic background traffic.
             sized = msg.get('type') in ('input', 'traffic')
             data = encode_sized(msg, self.payload_bytes if sized else 0)
             if self.protocol == 'hybrid' and sized:
@@ -183,8 +182,7 @@ class Arena:
             self.running = False
 
     def send_burst(self):
-        # These messages add upstream load, but have NO effect on the gameplay state.
-        # The Phase 7 server ignores messages of type traffic.
+        # These messages add upstream load, but have no effect on the gameplay state
         for _ in range(self.burst_count):
             self.burst_seq += 1
             self.send({'type': 'traffic', 'seq': self.burst_seq})
@@ -280,7 +278,7 @@ class Arena:
             elif kind == 'reliable_world' and self.protocol == 'udp':
                 event_id = msg.get('event_id')
                 if type(event_id) is int:
-                    # ACK every valid event, including duplicates: ACKs can be lost.
+                    # ACK every valid event, including duplicates
                     self.send({'type': 'event_ack', 'event_id': event_id})
                     self.log('event_ack', self.player_id, '', event_id, '', '', '', '', 0)
                     if event_id not in self.reliable_seen:
@@ -299,13 +297,10 @@ class Arena:
                     self.last_own_ack = seq
                     while self.pending and self.pending[0][0] <= seq:
                         self.pending.popleft()
-                    # Rebuild predicted location from server's acknowledged position.
+                    # Rebuild predicted location from server's acknowledged position
                     px, py = float(x), float(y)
                     for _, dx, dy, dt in self.pending:
                         px, py = move(px, py, dx, dy, dt)
-                    # Correction distance compares the current predicted location
-                    # with the reconciled prediction after replaying unacknowledged inputs.
-                    # This is not the error against the server's location at the same time.
                     correction_px = math.hypot(px - self.x, py - self.y)
                     corrected = int(correction_px >= self.correction_threshold_px)
                     self.correction_samples.append(correction_px)
@@ -350,7 +345,7 @@ class Arena:
                 self.last_network_step = now
                 self.seq += 1
                 self.pending.append((self.seq, dx, dy, elapsed))
-                # Prevent unlimited memory growth if acknowledgements are lost.
+                # Prevent unlimited memory growth if acknowledgements are lost
                 while len(self.pending) > 120:
                     self.pending.popleft()
                 self.send({'type': 'input', 'seq': self.seq, 'dx': dx, 'dy': dy,
@@ -360,7 +355,7 @@ class Arena:
                 self.send_burst()
                 self.next_burst += (int(max(0, now-self.next_burst)/self.burst_interval)+1)*self.burst_interval
         elif self.running and self.protocol == 'udp' and now - self.last_join > 1:
-            self.send({'type': 'join'})  # retry if initial join/welcome lost
+            self.send({'type': 'join'})  # Retry if initial join/welcome lost
             self.last_join = now
         self.draw(now)
         if self.running:
@@ -424,7 +419,6 @@ class Arena:
     def close(self):
         self.running = False
         if self.protocol == 'udp':
-            # Best effort: UDP leave can be lost; server also expires stale clients.
             try:
                 self.sock.send(json.dumps({'type': 'leave'}).encode())
             except OSError:

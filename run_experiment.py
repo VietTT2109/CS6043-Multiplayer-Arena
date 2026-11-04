@@ -122,7 +122,7 @@ def main():
                 traffic = launch(c1, ['iperf3', '-c', '10.10.3.2', '-u', '-b', f'{a.iperf_kbps}K',
                                       '-t', str(a.traffic_duration), '-R', '-p', '5201'], 'iperf_client')
             time.sleep(0.2)
-        time.sleep(1.2)  # allow clients' auto-close to flush CSV
+        time.sleep(1.2)
         for proc in procs:
             stop(proc)
         try:

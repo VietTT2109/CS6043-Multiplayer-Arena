@@ -14,7 +14,7 @@ from mininet.net import Mininet
 def configure(net):
     c1, c2, r1, r2, srv = (net[n] for n in ('c1', 'c2', 'r1', 'r2', 'srv'))
 
-    # Every interface is explicitly numbered; no OpenFlow switches/controllers.
+    # Every interface is explicitly numbered; no OpenFlow switches/controllers
     for node, intf, addr in [
         (c1, 'c1-eth0', '10.10.1.2/24'),
         (c2, 'c2-eth0', '10.10.2.2/24'),
