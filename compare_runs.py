@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Aggregate completed runs and optionally plot mean update age."""
 import argparse
 import csv
 import math
 import statistics
 from collections import defaultdict
 from pathlib import Path
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -56,7 +54,6 @@ def main():
     plt.tight_layout()
     plt.savefig(root / 'protocol_comparison.png', dpi=140)
     plt.close()
-
 
 if __name__ == '__main__':
     main()

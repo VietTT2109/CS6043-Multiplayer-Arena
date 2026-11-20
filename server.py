@@ -1,4 +1,3 @@
-"""Coin Rush: server-authoritative TCP/UDP movement, timed rounds, optional relay impairment."""
 import argparse
 import csv
 import secrets
@@ -16,13 +15,11 @@ SPEED = 150.0
 PLAYER_R, COIN_R = 13, 11
 BUFFER = 8192
 
-
 def valid_input(m):
     return (isinstance(m, dict) and m.get('type') == 'input'
             and type(m.get('seq')) is int and m['seq'] >= 0
             and all(type(m.get(k)) in (int, float) and math.isfinite(m[k])
                     and -1 <= m[k] <= 1 for k in ('dx', 'dy')))
-
 
 class Game:
     def __init__(self, round_seconds=60, intermission_seconds=8, min_players=2):
@@ -99,7 +96,6 @@ class Game:
                     'player_count': len(self.scores), 'min_players': self.min_players}
 
     def input(self, pid, msg):
-        """Returns (authoritative movement update, world changed), or (None, False)."""
         if not valid_input(msg):
             return None, False
         with self.lock:
@@ -128,7 +124,6 @@ class Game:
             update = {'type': 'move', 'id': pid, 'x': round(x, 2), 'y': round(y, 2),
                       'seq': msg['seq'], 'sent_at': msg.get('sent_at')}
             return update, coin_changed
-
 
 class DelayedRelay:
     def __init__(self, delay_ms, loss_pct, bandwidth_kbps=0, background_kbps=0,
@@ -225,9 +220,7 @@ class DelayedRelay:
                 except OSError:
                     pass
 
-
 class ReliableEvents:
-    """Retransmit changed UDP world snapshots until ACK, with bounded retries."""
     def __init__(self, send, log_file=None, timeout=0.35, max_retries=8):
         self.send = send
         self.timeout = timeout
@@ -299,7 +292,6 @@ class ReliableEvents:
                         self.log('retry', peer, version, item[2])
                     except OSError:
                         pass
-
 
 def serve_tcp(host, port, relay, round_seconds, intermission_seconds, min_players):
     game = Game(round_seconds, intermission_seconds, min_players)
@@ -374,7 +366,6 @@ def serve_tcp(host, port, relay, round_seconds, intermission_seconds, min_player
         send(conn, {'type': 'welcome', 'id': pid, 'x': WIDTH/2, 'y': HEIGHT/2})
         broadcast_world()
         threading.Thread(target=handle, args=(conn, pid), daemon=True).start()
-
 
 def serve_udp(host, port, relay, round_seconds, intermission_seconds, min_players, reliable_log_file=None, event_loss_pct=0):
     game = Game(round_seconds, intermission_seconds, min_players)
@@ -474,9 +465,7 @@ def serve_udp(host, port, relay, round_seconds, intermission_seconds, min_player
             if changed:
                 broadcast_world()
 
-
 def serve_hybrid(host, port, udp_port, relay, round_seconds, intermission_seconds, min_players):
-    """TCP control plane, UDP movement plane; linked with random session tokens."""
     game = Game(round_seconds, intermission_seconds, min_players)
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -590,7 +579,6 @@ def serve_hybrid(host, port, udp_port, relay, round_seconds, intermission_second
             conn.close()
             continue
         threading.Thread(target=handle, args=(conn, pid, token), daemon=True).start()
-
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()

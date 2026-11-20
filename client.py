@@ -1,4 +1,3 @@
-"""Coin Rush Tkinter client: locally predicted, server-authoritative multiplayer."""
 import argparse
 import csv
 import json
@@ -17,9 +16,7 @@ SPEED = 150.0
 RENDER_MS = 16
 RATE_WINDOW = 5.0
 
-
 def encode_sized(msg, target_bytes):
-    """Make a JSON payload of exactly target_bytes."""
     raw = json.dumps(msg, separators=(',', ':'), ensure_ascii=True).encode('ascii')
     if not target_bytes:
         return raw
@@ -32,13 +29,10 @@ def encode_sized(msg, target_bytes):
         raise ValueError(f'Cannot pad message from {len(raw)} to {target_bytes} bytes')
     return raw[:-1] + b',"p":"' + b'x' * (target_bytes - len(raw) - overhead) + b'"}'
 
-
-
 def move(x, y, dx, dy, dt):
     magnitude = max(1.0, math.hypot(dx, dy))
     return (min(WIDTH - 15, max(15, x + SPEED * dx / magnitude * dt)),
             min(HEIGHT - 15, max(15, y + SPEED * dy / magnitude * dt)))
-
 
 class Arena:
     def __init__(self, root, protocol, host, port, update_hz=30, log_file=None,
@@ -182,7 +176,6 @@ class Arena:
             self.running = False
 
     def send_burst(self):
-        # These messages add upstream load, but have no effect on the gameplay state
         for _ in range(self.burst_count):
             self.burst_seq += 1
             self.send({'type': 'traffic', 'seq': self.burst_seq})
@@ -278,7 +271,6 @@ class Arena:
             elif kind == 'reliable_world' and self.protocol == 'udp':
                 event_id = msg.get('event_id')
                 if type(event_id) is int:
-                    # ACK every valid event, including duplicates
                     self.send({'type': 'event_ack', 'event_id': event_id})
                     self.log('event_ack', self.player_id, '', event_id, '', '', '', '', 0)
                     if event_id not in self.reliable_seen:
@@ -297,7 +289,6 @@ class Arena:
                     self.last_own_ack = seq
                     while self.pending and self.pending[0][0] <= seq:
                         self.pending.popleft()
-                    # Rebuild predicted location from server's acknowledged position
                     px, py = float(x), float(y)
                     for _, dx, dy, dt in self.pending:
                         px, py = move(px, py, dx, dy, dt)
@@ -345,7 +336,6 @@ class Arena:
                 self.last_network_step = now
                 self.seq += 1
                 self.pending.append((self.seq, dx, dy, elapsed))
-                # Prevent unlimited memory growth if acknowledgements are lost
                 while len(self.pending) > 120:
                     self.pending.popleft()
                 self.send({'type': 'input', 'seq': self.seq, 'dx': dx, 'dy': dy,
@@ -355,7 +345,7 @@ class Arena:
                 self.send_burst()
                 self.next_burst += (int(max(0, now-self.next_burst)/self.burst_interval)+1)*self.burst_interval
         elif self.running and self.protocol == 'udp' and now - self.last_join > 1:
-            self.send({'type': 'join'})  # Retry if initial join/welcome lost
+            self.send({'type': 'join'})
             self.last_join = now
         self.draw(now)
         if self.running:
@@ -434,7 +424,6 @@ class Arena:
             self.log_handle.flush()
             self.log_handle.close()
         self.root.destroy()
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

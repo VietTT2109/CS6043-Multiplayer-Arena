@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Run on a Linux VM with Mininet installed:
-    sudo -E python3 multihop.py --bw-mbps 1 --delay-ms 20 --loss-pct 0
-"""
 import argparse
 
 from mininet.cli import CLI
@@ -10,11 +6,8 @@ from mininet.link import TCLink
 from mininet.log import info, setLogLevel
 from mininet.net import Mininet
 
-
 def configure(net):
     c1, c2, r1, r2, srv = (net[n] for n in ('c1', 'c2', 'r1', 'r2', 'srv'))
-
-    # Every interface is explicitly numbered; no OpenFlow switches/controllers
     for node, intf, addr in [
         (c1, 'c1-eth0', '10.10.1.2/24'),
         (c2, 'c2-eth0', '10.10.2.2/24'),
@@ -39,7 +32,6 @@ def configure(net):
 
 
 def build_network(bw_mbps=1.0, delay_ms=20.0, loss_pct=0.0, queue_packets=100):
-    """Construct and start a topology for the experiment runner."""
     net = Mininet(controller=None, link=TCLink, build=False, autoSetMacs=True)
     try:
         c1 = net.addHost('c1')
@@ -61,7 +53,6 @@ def build_network(bw_mbps=1.0, delay_ms=20.0, loss_pct=0.0, queue_packets=100):
     except Exception:
         net.stop()
         raise
-
 
 def main():
     ap = argparse.ArgumentParser(description='Coin Rush two-router Mininet network')
@@ -108,7 +99,6 @@ def main():
         CLI(net)
     finally:
         net.stop()
-
 
 if __name__ == '__main__':
     setLogLevel('info')

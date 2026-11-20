@@ -1,10 +1,8 @@
-"""Analyze client CSV logs. Usage: python analyze_logs.py file1.csv file2.csv ..."""
 import argparse
 import csv
 import statistics
 from collections import defaultdict
 from pathlib import Path
-
 
 def percentile(values, percentile_value):
     values = sorted(values)
@@ -14,7 +12,6 @@ def percentile(values, percentile_value):
     low = int(index)
     high = min(low + 1, len(values) - 1)
     return values[low] * (high - index) + values[high] * (index - low)
-
 
 def summarize(path):
     with open(path, newline='', encoding='utf-8') as handle:
@@ -64,7 +61,6 @@ def summarize(path):
             'mean_correction': statistics.mean(correction_values) if correction_values else float('nan'),
             'p95_correction': percentile(correction_values, 95),
             'correction_count': correction_count}
-
 
 def main():
     parser = argparse.ArgumentParser(description='Summarize TCP/UDP movement CSV files')
@@ -117,7 +113,6 @@ def main():
     print(f'Saved graph to {throughput_path}')
     plt.close(fig)
     plt.close(fig2)
-
 
 if __name__ == '__main__':
     main()

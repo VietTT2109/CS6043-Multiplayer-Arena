@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Run a timed Coin Rush test in a fresh Mininet topology.
-
-Requires Ubuntu with Mininet, Tk, iperf3 and access to an X desktop:
-    sudo -E python3 run_experiment.py --protocol hybrid --duration 60
-"""
 import argparse
 import csv
 import datetime as dt
@@ -15,11 +10,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-
 from multihop import build_network
 
 HERE = Path(__file__).resolve().parent
-
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
@@ -55,7 +48,6 @@ def parse_args():
         p.error('DISPLAY is missing; run from an Ubuntu graphical desktop with sudo -E')
     return a
 
-
 def stop(proc):
     if proc is None or proc.poll() is not None:
         return
@@ -65,7 +57,6 @@ def stop(proc):
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=2)
-
 
 def main():
     a = parse_args()
@@ -155,7 +146,6 @@ def main():
             handle.close()
         if net is not None:
             net.stop()
-
 
 if __name__ == '__main__':
     main()
